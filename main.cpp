@@ -1,9 +1,38 @@
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <numbers>
+#include <string>
 #include <vector>
+
+const char *pickPreferredRenderer() {
+  int numDrivers = SDL_GetNumRenderDrivers();
+  std::vector<std::string> available;
+  for (int i = 0; i < numDrivers; ++i) {
+    available.emplace_back(SDL_GetRenderDriver(i));
+  }
+
+#if defined(SDL_PLATFORM_WIN32)
+  static const std::vector<const char *> priority = {"direct3d12",
+                                                     "direct3d11"};
+#elif defined(SDL_PLATFORM_MACOS)
+  static const std::vector<const char *> priority = {"metal"};
+#elif defined(SDL_PLATFORM_LINUX)
+  static const std::vector<const char *> priority = {"vulkan"};
+#else
+  static const std::vector<const char *> priority = {};
+#endif
+
+  for (const char *name : priority) {
+    if (std::find(available.begin(), available.end(), name) !=
+        available.end()) {
+      return name;
+    }
+  }
+  return nullptr; // nenhum preferido disponivel: deixa o SDL escolher
+}
 
 void drawCircle(SDL_Renderer *renderer, float cx, float cy, float radius,
                 int sides, SDL_FColor color) {
@@ -86,9 +115,10 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // cria renderizador com janela e o driver (nullptr, faz procurar o melhor
-  // driver disponivel no seu SO)
-  SDL_Renderer *renderer = SDL_CreateRenderer(window, "vulkan");
+  // cria renderizador com janela e o driver (nullptr, faz procurar o primeiro
+  // da lista de drivers disponivel no seu SO) a funcao faz a logica de escolher
+  // o melhor renderizador de cada plataforma
+  SDL_Renderer *renderer = SDL_CreateRenderer(window, pickPreferredRenderer());
 
   if (!renderer) {
     printf("Erro ao criar renderizador: %s", SDL_GetError());
