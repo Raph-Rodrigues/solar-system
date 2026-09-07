@@ -1,8 +1,46 @@
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_properties.h>
-#include <SDL3/SDL_render.h>
+#include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <numbers>
+#include <vector>
+
+void drawCircle(SDL_Renderer *renderer, float cx, float cy, float radius,
+                int sides, SDL_FColor color) {
+  std::vector<SDL_Vertex> vertices;
+  vertices.reserve(sides + 1);
+
+  // vertice central: compartilhado por todos os triangulos do leque
+  SDL_Vertex center;
+  center.position = {cx, cy};
+  center.color = color;
+  center.tex_coord = {0.0f, 0.0f};
+  vertices.push_back(center);
+
+  // vertices do poligono inscrito, um para cada lado
+  for (int k = 0; k < sides; k++) {
+    float angle = (2.0f * std::numbers::pi * k) / sides;
+    SDL_Vertex v;
+    v.position = {cx + radius * std::cos(angle), cy + radius * std::sin(angle)};
+    v.color = color;
+    v.tex_coord = {0.0f, 0.0f};
+    vertices.push_back(v);
+  }
+
+  // indices: cada triangulo liga o centro (indice 0) a dois vertices
+  // consecutivos do poligono
+  std::vector<int> index;
+  index.reserve(sides * 3);
+  for (int k = 1; k <= sides; k++) {
+    index.push_back(0);
+    index.push_back(k);
+    index.push_back(k == sides ? 1 : k + 1); // fecha o leque no ultimo
+  }
+
+  SDL_RenderGeometry(renderer, nullptr, vertices.data(),
+                     static_cast<int>(vertices.size()), index.data(),
+                     static_cast<int>(index.size()));
+}
 
 int main(int argc, char *argv[]) {
   // inicializa o subsistema de video do SDL
@@ -50,7 +88,7 @@ int main(int argc, char *argv[]) {
 
   // cria renderizador com janela e o driver (nullptr, faz procurar o melhor
   // driver disponivel no seu SO)
-  SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
+  SDL_Renderer *renderer = SDL_CreateRenderer(window, "vulkan");
 
   if (!renderer) {
     printf("Erro ao criar renderizador: %s", SDL_GetError());
@@ -72,9 +110,18 @@ int main(int argc, char *argv[]) {
   bool running = true;
   SDL_Event event;
 
-  // criando um retangulo com Ponto Flutuante do SDL
-  SDL_FRect rect = {100.0f, 250.0f, 100.0f, 100.0f};
-  float speed = 4.0f;
+  constexpr float sunX = 400.0f;
+  constexpr float sunY = 300.0f;
+  constexpr float sunRadius = 50.0f;
+
+  // parametros da orbita do planeta
+  float orbitRadius = 150.0f; // distancia do planeta ao sol, em pixels
+  float planetRadius = 15.0f; // raio visual do planeta
+  float angle = 0.0f;         // angulo atual na orbita, em radianos
+  float orbitalPeriod = 4.0f; // segundos para completar uma volta
+  float angularSpeed =
+      2.0f * std::numbers::pi_v<float> / orbitalPeriod; // rad/s
+  constexpr float dt = 1.0f / 60.0f; // passo de tempo fixo (~60 FPS)
 
   // loop principal
   while (running) {
@@ -86,10 +133,7 @@ int main(int argc, char *argv[]) {
     }
 
     // atualização
-    rect.x += speed;
-    if (rect.x + rect.w > width || rect.x < 0.0f) {
-      speed = -speed;
-    }
+    angle += angularSpeed * dt; // avanca o angulo do planeta em sua orbita
 
     // renderização
 
@@ -97,9 +141,16 @@ int main(int argc, char *argv[]) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // preto
     SDL_RenderClear(renderer);
 
+    // posicao do planeta na orbita, calculada a partir do angulo atual
+    float planetX = sunX + orbitRadius * std::cos(angle);
+    float planetY = sunY + orbitRadius * std::sin(angle);
+
     // alterar para cor do pincel e desenhar o retangulo com a cor desejada
-    SDL_SetRenderDrawColor(renderer, 50, 150, 250, 255); // azul
-    SDL_RenderFillRect(renderer, &rect);
+    SDL_FColor yellow = {1.0f, 0.9f, 0.2f, 1.0f};
+    drawCircle(renderer, sunX, sunY, sunRadius, 48, yellow);
+
+    SDL_FColor blue = {50.0f / 255.0f, 150.0f / 255.0f, 250.0f / 255.0f, 1.0f};
+    drawCircle(renderer, planetX, planetY, planetRadius, 32, blue);
 
     // atualiza a tela apresentando o que foi desenhado
     SDL_RenderPresent(renderer);

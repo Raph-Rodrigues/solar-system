@@ -1,6 +1,6 @@
 # Compilador e flags de otimização/avisos
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -O2
+CXXFLAGS = -std=c++20 -Wall -O2
 
 # Coleta os caminhos de include e bibliotecas do SDL3 usando o pkg-config
 SDL3_CFLAGS := $(shell pkg-config --cflags sdl3)
