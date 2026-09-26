@@ -1,7 +1,9 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
+#include <deque>
 #include <iostream>
 #include <numbers>
 #include <string>
@@ -71,11 +73,36 @@ void drawCircle(SDL_Renderer *renderer, float cx, float cy, float radius,
                      static_cast<int>(index.size()));
 }
 
+using Trail = std::deque<SDL_FPoint>;
+
+void addTrailPoint(Trail &trail, float x, float y, size_t maxLength) {
+  trail.push_back({x, y});
+  if (trail.size() > maxLength) {
+    trail.pop_front(); // remove o mais antigo
+  }
+}
+
+void drawTrail(SDL_Renderer *renderer, const Trail &trail, Uint8 r, Uint8 g,
+               Uint8 b) {
+  size_t n = trail.size();
+  if (n < 2)
+    return;
+
+  for (size_t i = 0; i + 1 < n; ++i) {
+    // t vai de 0 (ponto mais antigo) ate 1 (ponto mais recente)
+    float t = static_cast<float>(i) / static_cast<float>(n - 1);
+    Uint8 alpha = static_cast<Uint8>(t * 255.0f);
+    SDL_SetRenderDrawColor(renderer, r, g, b, alpha);
+    SDL_RenderLine(renderer, trail[i].x, trail[i].y, trail[i + 1].x,
+                   trail[i + 1].y);
+  }
+}
+
 int main(int argc, char *argv[]) {
   // inicializa o subsistema de video do SDL
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     printf("Erro ao inicializar o SDL: %s", SDL_GetError());
-    return 1;
+    return -1;
   }
 
   // obtem a lista de monitores conectados
@@ -85,7 +112,7 @@ int main(int argc, char *argv[]) {
   if (displays == nullptr || num_displays == 0) {
     printf("Nenhum monitor encontrado ou falha: %s", SDL_GetError());
     SDL_Quit();
-    return 1;
+    return -1;
   }
 
   // captura o monitor principal
@@ -112,19 +139,20 @@ int main(int argc, char *argv[]) {
   if (!window) {
     printf("Erro ao criar janela: %s", SDL_GetError());
     SDL_Quit();
-    return 1;
+    return -1;
   }
 
   // cria renderizador com janela e o driver (nullptr, faz procurar o primeiro
   // da lista de drivers disponivel no seu SO) a funcao faz a logica de escolher
   // o melhor renderizador de cada plataforma
   SDL_Renderer *renderer = SDL_CreateRenderer(window, pickPreferredRenderer());
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
   if (!renderer) {
     printf("Erro ao criar renderizador: %s", SDL_GetError());
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 1;
+    return -1;
   }
 
   // obtem a tabela de propriedades vinculada a este renderizador especifico
@@ -140,8 +168,8 @@ int main(int argc, char *argv[]) {
   bool running = true;
   SDL_Event event;
 
-  constexpr float sunX = 400.0f;
-  constexpr float sunY = 300.0f;
+  float sunX = (float)width / 2;
+  float sunY = (float)height / 2;
   constexpr float sunRadius = 50.0f;
 
   // parametros da orbita do planeta
@@ -151,6 +179,9 @@ int main(int argc, char *argv[]) {
   float orbitalPeriod = 4.0f; // segundos para completar uma volta
   float angularSpeed =
       2.0f * std::numbers::pi_v<float> / orbitalPeriod; // rad/s
+  constexpr size_t maxTrailLength = 200; // 3.3s de rastro a 60 FPS
+  Trail sunTrail;
+  Trail planetTrail;
   constexpr float dt = 1.0f / 60.0f; // passo de tempo fixo (~60 FPS)
 
   // loop principal
@@ -174,6 +205,12 @@ int main(int argc, char *argv[]) {
     // posicao do planeta na orbita, calculada a partir do angulo atual
     float planetX = sunX + orbitRadius * std::cos(angle);
     float planetY = sunY + orbitRadius * std::sin(angle);
+
+    addTrailPoint(sunTrail, sunX, sunY, maxTrailLength);
+    addTrailPoint(planetTrail, planetX, planetY, maxTrailLength);
+
+    drawTrail(renderer, sunTrail, 255, 230, 50);
+    drawTrail(renderer, planetTrail, 50, 150, 250);
 
     // alterar para cor do pincel e desenhar o retangulo com a cor desejada
     SDL_FColor yellow = {1.0f, 0.9f, 0.2f, 1.0f};
