@@ -10,7 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(SDL3 REQUIRED)
 
 # Configura o executável do projeto
-add_executable(solar-system main.cpp)
+add_executable(solar-system main.cpp Body.cpp Engine.cpp)
 
 # Vincula as definições e binários do SDL3 ao projeto
 target_link_libraries(solar-system PRIVATE SDL3::SDL3)

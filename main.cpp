@@ -1,138 +1,15 @@
 #include <SDL3/SDL.h>
-#include <algorithm>
 #include <cmath>
-#include <cstddef>
 #include <cstdio>
-#include <deque>
 #include <iostream>
-#include <numbers>
-#include <string>
-#include <vector>
 
-// Vec2: tipo basico para grandezas vetoriais 2D (posicao, velocidade,
-// aceleracao, forca). Separado do SDL_FPoint porque aqui ele carrega as
-// operacoes matematicas (soma, subtracao, multiplicacao por escalar) que
-// a fisica realmente usa nas equacoes.
-struct Vector2 {
-  float x = 0.0f;
-  float y = 0.0f;
+#include "Body.hpp"
+#include "Engine.hpp"
+#include "Physics.hpp"
+#include "Rendererselect.hpp"
+#include "Vec2.hpp"
 
-  Vector2 operator+(const Vector2 &other) const {
-    return {x + other.x, y + other.y};
-  }
-
-  Vector2 operator-(const Vector2 &other) const {
-    return {x - other.x, y - other.y};
-  }
-
-  Vector2 operator*(float scalar) const { return {x * scalar, y * scalar}; }
-};
-
-const char *pickPreferredRenderer() {
-  int numDrivers = SDL_GetNumRenderDrivers();
-  std::vector<std::string> available;
-  for (int i = 0; i < numDrivers; ++i) {
-    available.emplace_back(SDL_GetRenderDriver(i));
-  }
-
-#if defined(SDL_PLATFORM_WIN32)
-  static const std::vector<const char *> priority = {"direct3d12",
-                                                     "direct3d11"};
-#elif defined(SDL_PLATFORM_MACOS)
-  static const std::vector<const char *> priority = {"metal"};
-#elif defined(SDL_PLATFORM_LINUX)
-  static const std::vector<const char *> priority = {"vulkan"};
-#else
-  static const std::vector<const char *> priority = {};
-#endif
-
-  for (const char *name : priority) {
-    if (std::find(available.begin(), available.end(), name) !=
-        available.end()) {
-      return name;
-    }
-  }
-  return nullptr; // nenhum preferido disponivel: deixa o SDL escolher
-}
-
-void drawCircle(SDL_Renderer *renderer, float cx, float cy, float radius,
-                int sides, SDL_FColor color) {
-  std::vector<SDL_Vertex> vertices;
-  vertices.reserve(sides + 1);
-
-  // vertice central: compartilhado por todos os triangulos do leque
-  SDL_Vertex center;
-  center.position = {cx, cy};
-  center.color = color;
-  center.tex_coord = {0.0f, 0.0f};
-  vertices.push_back(center);
-
-  // vertices do poligono inscrito, um para cada lado
-  for (int k = 0; k < sides; k++) {
-    float angle = (2.0f * std::numbers::pi * k) / sides;
-    SDL_Vertex v;
-    v.position = {cx + radius * std::cos(angle), cy + radius * std::sin(angle)};
-    v.color = color;
-    v.tex_coord = {0.0f, 0.0f};
-    vertices.push_back(v);
-  }
-
-  // indices: cada triangulo liga o centro (indice 0) a dois vertices
-  // consecutivos do poligono
-  std::vector<int> index;
-  index.reserve(sides * 3);
-  for (int k = 1; k <= sides; k++) {
-    index.push_back(0);
-    index.push_back(k);
-    index.push_back(k == sides ? 1 : k + 1); // fecha o leque no ultimo
-  }
-
-  SDL_RenderGeometry(renderer, nullptr, vertices.data(),
-                     static_cast<int>(vertices.size()), index.data(),
-                     static_cast<int>(index.size()));
-}
-
-using Trail = std::deque<SDL_FPoint>;
-
-void addTrailPoint(Trail &trail, float x, float y, size_t maxLength) {
-  trail.push_back({x, y});
-  if (trail.size() > maxLength) {
-    trail.pop_front(); // remove o mais antigo
-  }
-}
-
-void drawTrail(SDL_Renderer *renderer, const Trail &trail, Uint8 r, Uint8 g,
-               Uint8 b) {
-  size_t n = trail.size();
-  if (n < 2)
-    return;
-
-  for (size_t i = 0; i + 1 < n; ++i) {
-    // t vai de 0 (ponto mais antigo) ate 1 (ponto mais recente)
-    float t = static_cast<float>(i) / static_cast<float>(n - 1);
-    Uint8 alpha = static_cast<Uint8>(t * 255.0f);
-    SDL_SetRenderDrawColor(renderer, r, g, b, alpha);
-    SDL_RenderLine(renderer, trail[i].x, trail[i].y, trail[i + 1].x,
-                   trail[i + 1].y);
-  }
-}
-
-// Avanca posicao e velocidade por um passo de tempo dt, dada uma
-// aceleracao (constante durante esse passo). Metodo: Euler semi-implicito.
-//
-// A diferenca para o Euler "ingenuo" (explicito): aqui a velocidade e
-// atualizada PRIMEIRO, e e essa velocidade JA NOVA que move a posicao
-// logo em seguida. Isso faz o metodo ser bem mais estavel em simulacoes
-// longas (como uma orbita) -- o Euler explicito tende a "ganhar" energia
-// artificialmente com o tempo, fazendo a orbita espiralar pra fora aos
-// poucos mesmo sem nenhuma forca extra agindo.
-void integrate(Vector2 &position, Vector2 &velocity, Vector2 acceleration,
-               float dt) {
-  velocity = velocity + acceleration * dt; // v = v + a*dt
-  position = position + velocity * dt;     // x = x + v*dt (v ja atualizada)
-}
-
-int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[]) {
+int main(int argc, char *argv[]) {
   // inicializa o subsistema de video do SDL
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     printf("Erro ao inicializar o SDL: %s", SDL_GetError());
@@ -166,7 +43,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[]) {
     printf("Erro ao obter tamanho do monitor: %s", SDL_GetError());
   }
 
-  // cria janela
+  // cria janela do tamanho do monitor principal
   SDL_Window *window =
       SDL_CreateWindow("Solar System", width, height, SDL_WINDOW_RESIZABLE);
 
@@ -176,11 +53,14 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[]) {
     return -1;
   }
 
-  // cria renderizador com janela e o driver (nullptr, faz procurar o primeiro
-  // da lista de drivers disponivel no seu SO) a funcao faz a logica de escolher
-  // o melhor renderizador de cada plataforma
+  // cria o renderizador usando o driver mais performatico detectado para
+  // este sistema operacional (ver RendererSelect.hpp)
   SDL_Renderer *renderer = SDL_CreateRenderer(window, pickPreferredRenderer());
-  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND); // habilita
+                                                             // transparencia,
+                                                             // usada no
+                                                             // desvanecimento
+                                                             // do rastro
 
   if (!renderer) {
     printf("Erro ao criar renderizador: %s", SDL_GetError());
@@ -199,35 +79,62 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[]) {
             << std::endl;
   std::cout << "========================================" << std::endl;
 
-  bool running = true;
-  SDL_Event event;
+  // --- construcao do sistema: Sol e um planeta em orbita circular ---
+  //
+  // essa e a primeira vez que a orbita nao e mais "desenhada" por uma
+  // formula angular -- ela emerge de verdade da gravitacao mutua entre os
+  // dois corpos, integrada passo a passo pelo Engine.
 
-  float sunX = (float)width / 2;
-  float sunY = (float)height / 2;
-  constexpr float sunRadius = 50.0f;
+  Engine engine;
 
-  // parametros da orbita do planeta
-  float orbitRadius = 150.0f; // distancia do planeta ao sol, em pixels
-  float planetRadius = 15.0f; // raio visual do planeta
-  float angle = 0.0f;         // angulo atual na orbita, em radianos
-  float orbitalPeriod = 4.0f; // segundos para completar uma volta
-  float angularSpeed =
-      2.0f * std::numbers::pi_v<float> / orbitalPeriod; // rad/s
-  constexpr size_t maxTrailLength = 200; // 3.3s de rastro a 60 FPS
-  Trail sunTrail;
-  Trail planetTrail;
+  // posicao do Sol: comeca fixo no centro da tela, mas repare que ele NAO
+  // esta travado ali por codigo nenhum -- e so que a massa dele e tao
+  // maior que a do planeta que o puxao gravitacional do planeta sobre ele
+  // e minusculo, entao ele quase nao se move. Essa e a mesma razao fisica
+  // pela qual dizemos, na pratica, que "a Terra orbita o Sol" e nao o
+  // contrario: tecnicamente os dois orbitam o centro de massa comum do
+  // sistema, so que esse centro fica extremamente perto do centro do Sol.
+  Vec2 sunPosition = {static_cast<float>(width) / 2.0f,
+                      static_cast<float>(height) / 2.0f};
+  constexpr float sunMass = 25000.0f; // massa, em unidades arbitrarias
+  constexpr float sunRadius = 50.0f;  // raio visual, em pixels
+
+  engine.addBody(Body("Sol", sunPosition, Vec2{0.0f, 0.0f}, sunMass, sunRadius,
+                      SDL_FColor{1.0f, 0.9f, 0.2f, 1.0f}));
+
+  // posicao inicial do planeta: a uma distancia orbitRadius do Sol,
+  // deslocado horizontalmente (a direita)
+  constexpr float orbitRadius = 200.0f; // distancia inicial ao Sol, em px
+  constexpr float planetMass = 10.0f;   // bem menor que a do Sol de proposito
+  constexpr float planetRadius = 15.0f; // raio visual, em pixels
+
+  Vec2 planetPosition = sunPosition + Vec2{orbitRadius, 0.0f};
+
+  // velocidade necessaria para uma orbita CIRCULAR a essa distancia,
+  // derivada igualando a forca gravitacional a forca centripeta
+  // necessaria para manter o corpo em circulo:
+  //
+  //   G*M*m/R^2 = m*v^2/R   (forca gravitacional = forca centripeta)
+  //        v = sqrt(G*M/R)
+  //
+  // essa e a mesma formula que chegamos deduzindo a_c = v^2/R a partir da
+  // geometria de triangulos semelhantes -- agora ela entra diretamente na
+  // condicao inicial do planeta, em vez de um periodo orbital arbitrario
+  float orbitalSpeed = std::sqrt(G * sunMass / orbitRadius);
+
+  // a velocidade tem que ser TANGENTE ao raio (perpendicular a ele) para a
+  // orbita sair circular -- como o planeta comeca a direita do Sol
+  // (deslocamento horizontal), a direcao tangente e a vertical
+  Vec2 planetVelocity = {0.0f, -orbitalSpeed};
+
+  engine.addBody(
+      Body("Planeta", planetPosition, planetVelocity, planetMass, planetRadius,
+           SDL_FColor{50.0f / 255.0f, 150.0f / 255.0f, 250.0f / 255.0f, 1.0f}));
+
   constexpr float dt = 1.0f / 60.0f; // passo de tempo fixo (~60 FPS)
 
-  // --- teste do motor: queda livre com quique ---
-  // forca conhecida e constante (gravidade), sem nada de orbita ainda.
-  // serve pra confirmar que integrate() esta correto antes de implementar
-  // a lei da gravitacao universal, que e bem mais complexa (forca varia
-  // com a distancia, e dois corpos se influenciam mutuamente).
-  Vector2 ballPos = {200.0f, 100.0f};
-  Vector2 ballVel = {180.0f, 0.0f};           // velocidade horizontal inicial
-  constexpr Vector2 gravity = {0.0f, 700.0f}; // aceleracao constante (px/s^2)
-  constexpr float ballRadius = 14.0f;
-  constexpr float restitution = 0.75f; // fracao de velocidade mantida no quique
+  bool running = true;
+  SDL_Event event;
 
   // loop principal
   while (running) {
@@ -238,56 +145,17 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[]) {
       }
     }
 
-    // atualização
-    angle += angularSpeed * dt; // avanca o angulo do planeta em sua orbita
+    // atualizacao: aplica gravitacao mutua entre todos os corpos e integra
+    // suas posicoes/velocidades por um passo de tempo dt
+    engine.update(dt);
 
-    // avanca a bolinha usando o motor de integracao generico
-    integrate(ballPos, ballVel, gravity, dt);
-
-    // colisao simples com o chao: inverte a velocidade vertical,
-    // perdendo uma fracao de energia a cada quique (senao quicaria
-    // pra sempre na mesma altura, o que nao e fisico)
-    if (ballPos.y + ballRadius > height) {
-      ballPos.y = height - ballRadius;
-      ballVel.y = -ballVel.y * restitution;
-    }
-    // colisao simples com as paredes laterais
-    if (ballPos.x - ballRadius < 0.0f) {
-      ballPos.x = ballRadius;
-      ballVel.x = -ballVel.x * restitution;
-    } else if (ballPos.x + ballRadius > width) {
-      ballPos.x = width - ballRadius;
-      ballVel.x = -ballVel.x * restitution;
-    }
-
-    // renderização
-
-    // limpa tela com uma cor
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // preto
+    // renderizacao
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // limpa com preto
     SDL_RenderClear(renderer);
 
-    // posicao do planeta na orbita, calculada a partir do angulo atual
-    float planetX = sunX + orbitRadius * std::cos(angle);
-    float planetY = sunY + orbitRadius * std::sin(angle);
+    engine.render(renderer); // desenha rastros e corpos de todo o sistema
 
-    addTrailPoint(sunTrail, sunX, sunY, maxTrailLength);
-    addTrailPoint(planetTrail, planetX, planetY, maxTrailLength);
-
-    drawTrail(renderer, sunTrail, 255, 230, 50);
-    drawTrail(renderer, planetTrail, 50, 150, 250);
-
-    // alterar para cor do pincel e desenhar o retangulo com a cor desejada
-    SDL_FColor yellow = {1.0f, 0.9f, 0.2f, 1.0f};
-    drawCircle(renderer, sunX, sunY, sunRadius, 48, yellow);
-
-    SDL_FColor blue = {50.0f / 255.0f, 150.0f / 255.0f, 250.0f / 255.0f, 1.0f};
-    drawCircle(renderer, planetX, planetY, planetRadius, 32, blue);
-
-    SDL_FColor green = {0.4f, 0.9f, 0.4f, 1.0f};
-    drawCircle(renderer, ballPos.x, ballPos.y, ballRadius, 24, green);
-
-    // atualiza a tela apresentando o que foi desenhado
-    SDL_RenderPresent(renderer);
+    SDL_RenderPresent(renderer); // apresenta o que foi desenhado
 
     SDL_Delay(16); // pequeno atraso para limitar o uso de CPU (Aprox. 60FPS)
   }
@@ -297,5 +165,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[]) {
   SDL_DestroyWindow(window);
   SDL_free(displays);
   SDL_Quit();
+
   return 0;
 }

@@ -10,7 +10,7 @@ SDL3_LIBS   := $(shell pkg-config --libs sdl3)
 TARGET = solar-system
 
 # Arquivo fonte
-SRCS = main.cpp
+SRCS = main.cpp Body.cpp Engine.cpp
 
 # Regra padrão executada ao rodar apenas 'make'
 all: $(TARGET)
