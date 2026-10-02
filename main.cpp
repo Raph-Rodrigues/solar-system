@@ -9,6 +9,25 @@
 #include <string>
 #include <vector>
 
+// Vec2: tipo basico para grandezas vetoriais 2D (posicao, velocidade,
+// aceleracao, forca). Separado do SDL_FPoint porque aqui ele carrega as
+// operacoes matematicas (soma, subtracao, multiplicacao por escalar) que
+// a fisica realmente usa nas equacoes.
+struct Vector2 {
+  float x = 0.0f;
+  float y = 0.0f;
+
+  Vector2 operator+(const Vector2 &other) const {
+    return {x + other.x, y + other.y};
+  }
+
+  Vector2 operator-(const Vector2 &other) const {
+    return {x - other.x, y - other.y};
+  }
+
+  Vector2 operator*(float scalar) const { return {x * scalar, y * scalar}; }
+};
+
 const char *pickPreferredRenderer() {
   int numDrivers = SDL_GetNumRenderDrivers();
   std::vector<std::string> available;
@@ -98,7 +117,22 @@ void drawTrail(SDL_Renderer *renderer, const Trail &trail, Uint8 r, Uint8 g,
   }
 }
 
-int main(int argc, char *argv[]) {
+// Avanca posicao e velocidade por um passo de tempo dt, dada uma
+// aceleracao (constante durante esse passo). Metodo: Euler semi-implicito.
+//
+// A diferenca para o Euler "ingenuo" (explicito): aqui a velocidade e
+// atualizada PRIMEIRO, e e essa velocidade JA NOVA que move a posicao
+// logo em seguida. Isso faz o metodo ser bem mais estavel em simulacoes
+// longas (como uma orbita) -- o Euler explicito tende a "ganhar" energia
+// artificialmente com o tempo, fazendo a orbita espiralar pra fora aos
+// poucos mesmo sem nenhuma forca extra agindo.
+void integrate(Vector2 &position, Vector2 &velocity, Vector2 acceleration,
+               float dt) {
+  velocity = velocity + acceleration * dt; // v = v + a*dt
+  position = position + velocity * dt;     // x = x + v*dt (v ja atualizada)
+}
+
+int main([[maybe_unused]] int argc, [[maybe_unused]] char *argv[]) {
   // inicializa o subsistema de video do SDL
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     printf("Erro ao inicializar o SDL: %s", SDL_GetError());
@@ -184,6 +218,17 @@ int main(int argc, char *argv[]) {
   Trail planetTrail;
   constexpr float dt = 1.0f / 60.0f; // passo de tempo fixo (~60 FPS)
 
+  // --- teste do motor: queda livre com quique ---
+  // forca conhecida e constante (gravidade), sem nada de orbita ainda.
+  // serve pra confirmar que integrate() esta correto antes de implementar
+  // a lei da gravitacao universal, que e bem mais complexa (forca varia
+  // com a distancia, e dois corpos se influenciam mutuamente).
+  Vector2 ballPos = {200.0f, 100.0f};
+  Vector2 ballVel = {180.0f, 0.0f};           // velocidade horizontal inicial
+  constexpr Vector2 gravity = {0.0f, 700.0f}; // aceleracao constante (px/s^2)
+  constexpr float ballRadius = 14.0f;
+  constexpr float restitution = 0.75f; // fracao de velocidade mantida no quique
+
   // loop principal
   while (running) {
     // processa eventos
@@ -195,6 +240,25 @@ int main(int argc, char *argv[]) {
 
     // atualização
     angle += angularSpeed * dt; // avanca o angulo do planeta em sua orbita
+
+    // avanca a bolinha usando o motor de integracao generico
+    integrate(ballPos, ballVel, gravity, dt);
+
+    // colisao simples com o chao: inverte a velocidade vertical,
+    // perdendo uma fracao de energia a cada quique (senao quicaria
+    // pra sempre na mesma altura, o que nao e fisico)
+    if (ballPos.y + ballRadius > height) {
+      ballPos.y = height - ballRadius;
+      ballVel.y = -ballVel.y * restitution;
+    }
+    // colisao simples com as paredes laterais
+    if (ballPos.x - ballRadius < 0.0f) {
+      ballPos.x = ballRadius;
+      ballVel.x = -ballVel.x * restitution;
+    } else if (ballPos.x + ballRadius > width) {
+      ballPos.x = width - ballRadius;
+      ballVel.x = -ballVel.x * restitution;
+    }
 
     // renderização
 
@@ -218,6 +282,9 @@ int main(int argc, char *argv[]) {
 
     SDL_FColor blue = {50.0f / 255.0f, 150.0f / 255.0f, 250.0f / 255.0f, 1.0f};
     drawCircle(renderer, planetX, planetY, planetRadius, 32, blue);
+
+    SDL_FColor green = {0.4f, 0.9f, 0.4f, 1.0f};
+    drawCircle(renderer, ballPos.x, ballPos.y, ballRadius, 24, green);
 
     // atualiza a tela apresentando o que foi desenhado
     SDL_RenderPresent(renderer);
